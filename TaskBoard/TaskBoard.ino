@@ -7,6 +7,8 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
+//////// NETWORK INTERFACE VARIABLES //////// 
+
 const char* ssid = "SchulzN";//type your ssid
 const char* password = "6371831AAA";//type your password
 
@@ -17,6 +19,9 @@ const int NUM_ROOMS = 5;
 char* room_array[] = {"Kitchen", "Bedroom", "Office", "Outside", "Toiletries"};
 int main_room = 0;
 
+
+//////// TASK VARIABLES ////////
+
 // Globabl variables to store state of tasks
 const int MAX_TASKS = 10; // maximum number of tasks accepted from Todoist
 String tasks[MAX_TASKS] = {"", "", "", "", "", "", "", "", "", ""};
@@ -25,10 +30,23 @@ int taskIndex = 0; // the index of the currently selected task
 int indexOffset = 0; // offset for scrolling down the display
 int completedTask = -1; // the task that is completed; -1 for no task finished
 
+
+//////// LED VARIABLES //////// 
+
 // colors for the map LEDs
-const int NUM_LEDS
+const int NUM_LEDS = 10;
 int colors[NUM_LEDS][3] = {{0, 0, 0}, {0, 0, 0}, {0, 0, 0}, {0, 0, 0}, {0, 0, 0}};
 short ledStates = 0; // stores state of LED registers
+
+// LED pins
+const int latchPin1 = 18;
+const int latchPin2 = 5;
+const int clockPin = 17;
+const int dataPin = 19;
+const int ledEnablePin = 16;
+
+
+//////// BUTTON VARIABLES //////// 
 
 // button control
 bool pressed1 = false;
@@ -39,11 +57,26 @@ const int button2 = 13;
 
 int counter = 0;
 
+//////// IR VARIABLES ////////
+const int IRPin = 0;
+int idleCounts = 0; // count the number of idle cycles
+const int idle_to_sleep = 15; // cycles before going to sleep
+bool idle = false;
+int prevReading = 0; // previous IR reading for calculating change
+const int readingInterval = 5; // time delay between readings
+int jumpThresh = 25
+; // threshold in a jump in IR readings to reactivate
+
+//////// EXTERNAL DEVICE DECLARATION //////// 
+
 HTTPClient http;
 
 // Declaration for an SSD1306 display connected to I2C (SDA, SCL pins)
 #define OLED_RESET     4 // Reset pin # (or -1 if sharing Arduino reset pin)
 Adafruit_SSD1306 display = Adafruit_SSD1306(128, 64, &Wire);
+
+
+//////// FUNCTION DECLARATIONS //////// 
 
 // Get updated data
 void accessdb(int finishedTask);
@@ -51,17 +84,17 @@ void accessdb(int finishedTask);
 void updateDisplay();
 //set the map LEDs
 void setMap();
-
-//// interrupt functions for button presses
-//void togglePosition();
-//void completeTask();
+// update the LED masks
+void updateLED(int roomID, int *leds);
+// set the LEDs
+void updateMap(const short mapData);
+// turn everything off
+void clearOutput();
 
 void setup() {
   pinMode(button1, INPUT_PULLUP); 
   pinMode(button2, INPUT_PULLUP); 
-
-//  attachInterrupt(button1, togglePosition, FALLING);
-//  attachInterrupt(button2, completeTask, FALLING); 
+  
   Serial.begin(115200);
   delay(10);
 
@@ -71,9 +104,7 @@ void setup() {
     for(;;); // Don't proceed, loop forever
   }
 
-  // Show initial display buffer contents on the screen --
-  // the library initializes this with an Adafruit splash screen.
-  // Clear the buffer
+  // Clear the display
   display.clearDisplay();
   display.display();
   
@@ -96,8 +127,13 @@ void setup() {
   Serial.print("IP Address: ");
   Serial.print(WiFi.localIP());
   Serial.println("/");
+
+  // Initialize the screen
   accessdb();
   updateDisplay();
+
+  // get a preliminary IR reading
+  prevReading = analogRead(IRPin);
 }
 
 void loop() {
@@ -118,6 +154,7 @@ void loop() {
       counter = 0;
     }
     pressed1 = true;
+    idleCounts = 0;
   }
 
   // read button 2
@@ -129,12 +166,38 @@ void loop() {
     }
     counter = 0;
     pressed2 = true;
+    idleCounts = 0;
   }
   
   counter++;
-  if (counter > 300) {
-    accessdb();
-    updateDisplay();
+
+  // read the IR sensor 
+  if (counter % readingInterval == 0) {
+    int reading = analogRead(IRPin);
+    if (reading - prevReading > jumpThresh) {
+      idleCounts = 0;
+      if (idle) {
+        accessdb();
+        updateDisplay();
+      }
+    }
+    prevReading = reading;
+  }
+
+  // update
+  if (counter > 200) {
+    idleCounts++;
+    Serial.println(idleCounts);
+    if (idleCounts > idle_to_sleep) {
+      idle = true;
+      clearOutput();
+    } else {
+      idle = false;
+    }
+    if (!idle) {
+      accessdb();
+      updateDisplay();
+    }
     counter = 0;
   }
   delay(10);
@@ -231,26 +294,24 @@ void updateDisplay() {
 
 void setMap() {
   for(int i=0; i < NUM_LEDS; i++)  {
-    updateLED(colors[i]);
+    updateLED(i, colors[i]);
   }
   updateMap(ledStates);
 }
 
 
 // update bits in ledStates corresponding to a particular room
-void updateLED(Room room, short *leds)
-{
+void updateLED(int roomID, int *leds) {
   int mask = 0 | *leds;
+  mask = (mask << 1) | *(leds+1);
   mask = (mask << 1) | *(leds+2);
-  mask = (mask << 1) | *(leds+4);
-  mask = mask << (room.id * 3);
+  mask = mask << (roomID * 3);
 
   ledStates = ledStates | mask;
 }
 
 // writes data passed in through mapData to led registers
-void updateMap(const short mapData)
-{
+void updateMap(const short mapData) {
   digitalWrite(latchPin1, LOW);
   shiftOut(dataPin, clockPin, MSBFIRST, (mapData >> 8));
   digitalWrite(latchPin1, HIGH);
@@ -258,4 +319,15 @@ void updateMap(const short mapData)
   digitalWrite(latchPin2, LOW);
   shiftOut(dataPin, clockPin, MSBFIRST, mapData);
   digitalWrite(latchPin2, HIGH);
+}
+
+void clearOutput() {
+  for (int i = 0; i < NUM_LEDS; i++) {
+    for (int j = 0 ; j < 3; j++) {
+      colors[i][j] = 0;
+    }
+  }
+  setMap();
+  display.clearDisplay();
+  display.display();
 }
