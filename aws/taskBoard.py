@@ -75,10 +75,7 @@ def get_rgb(priority, room, current_room):
     g=1
   elif priority == 3:
     g=1
-    if room==current_room:
-      r=1
-    else:
-      b=1
+    r=1
   else:
     r=1
   return [r, g, b]

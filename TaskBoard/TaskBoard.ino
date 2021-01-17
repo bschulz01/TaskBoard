@@ -312,10 +312,12 @@ void updateDisplay() {
   int dotPos = 19 + 8*(taskIndex-indexOffset); // each line takes 8 pixels + offset of 3 pixels
   display.fillCircle(3, dotPos, 2, SSD1306_WHITE);
   display.display();
+  setMap();
 }
 
 // Set the colors on the map
 void setMap() {
+  ledStates = 0;
   for(int i=0; i < NUM_LEDS; i++)  {
     updateLED(i, colors[i]);
   }
@@ -324,9 +326,9 @@ void setMap() {
 
 // update bits in ledStates corresponding to a particular room
 void updateLED(int roomID, int *leds) {
-  int mask = 0 | *leds;
+  int mask = 0 | *(leds+2);
   mask = (mask << 1) | *(leds+1);
-  mask = (mask << 1) | *(leds+2);
+  mask = (mask << 1) | *leds;
   mask = mask << (roomID * 3);
 
   ledStates = ledStates | mask;
