@@ -1,6 +1,5 @@
-#include <ESP8266WiFi.h>
-#include <ESP8266HTTPClient.h>
-#include <Arduino_JSON.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <SPI.h>
 #include <Wire.h>
@@ -14,10 +13,10 @@ const char* password = "PSSWD";//type your password
 
 String host = "https://c4jxx1c9ia.execute-api.us-west-2.amazonaws.com/default/TaskBoard";
 char* fingerprint = "E1:0B:3B:EC:6D:81:A4:4E:D0:CB:05:03:2F:F0:02:9C:8E:D1:73:08";
-const char* token = "2dac5121447fb1ff7b5040689c361f2499f0c84a";
+const char* token = "YOUR_TOKEN_HERE";
 const int NUM_ROOMS = 5;
 char* room_array[] = {"Kitchen", "Bedroom", "Office", "Outside", "Toiletries"};
-int main_room = 0;
+int main_room = 2;
 
 
 //////// TASK VARIABLES ////////
@@ -34,7 +33,7 @@ int completedTask = -1; // the task that is completed; -1 for no task finished
 //////// LED VARIABLES //////// 
 
 // colors for the map LEDs
-const int NUM_LEDS = 10;
+const int NUM_LEDS = 5;
 int colors[NUM_LEDS][3] = {{0, 0, 0}, {0, 0, 0}, {0, 0, 0}, {0, 0, 0}, {0, 0, 0}};
 short ledStates = 0; // stores state of LED registers
 
@@ -88,12 +87,21 @@ void setMap();
 void updateLED(int roomID, int *leds);
 // set the LEDs
 void updateMap(const short mapData);
-// turn everything off
-void clearOutput();
 
 void setup() {
-  pinMode(button1, INPUT_PULLUP); 
-  pinMode(button2, INPUT_PULLUP); 
+  pinMode(button1, INPUT); 
+  pinMode(button2, INPUT); 
+  
+  // intialize pins
+  pinMode(latchPin1, OUTPUT);
+  pinMode(latchPin2, OUTPUT);
+  pinMode(dataPin, OUTPUT);  
+  pinMode(clockPin, OUTPUT);
+  pinMode(ledEnablePin, OUTPUT);
+
+  digitalWrite(ledEnablePin, LOW);
+  digitalWrite(latchPin1, HIGH);
+  digitalWrite(latchPin2, HIGH);
   
   Serial.begin(115200);
   delay(10);
@@ -105,7 +113,11 @@ void setup() {
   }
 
   // Clear the display
+  display.display();
   display.clearDisplay();
+  display.setCursor(0, 32);
+  display.print("Connecting to ");
+  display.println(ssid);
   display.display();
   
   // Connect to WiFi network
@@ -137,18 +149,26 @@ void setup() {
 }
 
 void loop() {
-  // read button 1
+  // poll the buttons
+  // update the tasks every 200 cycles
+  // don't update or display if the user has been idle for long enough 
+
+  // read button 1 - toggle selected task
   if (digitalRead(button1)) {
     pressed1 = false;
   } else {
     if (!pressed1) {
-      taskIndex++;
-      if (taskIndex >= tasksTodo) {
-        taskIndex = 0;
-        indexOffset = 0;
-      }
-      if (taskIndex >= 6) {
-        indexOffset = taskIndex - 5;
+      if (idle) {
+        idle = false;
+      } else {
+        taskIndex++;
+        if (taskIndex >= tasksTodo) {
+          taskIndex = 0;
+          indexOffset = 0;
+        }
+        if (taskIndex >= 6) {
+          indexOffset = taskIndex - 5;
+        }
       }
       updateDisplay();
       counter = 0;
@@ -157,11 +177,11 @@ void loop() {
     idleCounts = 0;
   }
 
-  // read button 2
+  // read button 2 - complete task
   if (digitalRead(button2)) {
     pressed2 = false;
   } else {
-    if (!pressed2) {
+    if (!pressed2 && !idle) {
       completedTask = taskIndex;
     }
     counter = 0;
@@ -169,7 +189,6 @@ void loop() {
     idleCounts = 0;
   }
   
-  counter++;
 
   // read the IR sensor 
   if (counter % readingInterval == 0) {
@@ -180,24 +199,26 @@ void loop() {
         accessdb();
         updateDisplay();
       }
+      idle = false;
     }
     prevReading = reading;
   }
 
-  // update
+  counter++;
+  // update from database
   if (counter > 200) {
-    idleCounts++;
-    Serial.println(idleCounts);
-    if (idleCounts > idle_to_sleep) {
-      idle = true;
-      clearOutput();
-    } else {
+    if (idleCounts < idle_to_sleep) {
       idle = false;
-    }
-    if (!idle) {
       accessdb();
       updateDisplay();
+    } else {
+      idle = true;
+      digitalWrite(ledEnablePin, HIGH);
+      display.clearDisplay();
+      display.println("");
+      display.display();
     }
+    idleCounts++;
     counter = 0;
   }
   delay(10);
@@ -224,13 +245,12 @@ void accessdb() {
     // Reset the task completion
     completedTask = -1;
 
-    // Connect
+    // Connect to the server
     http.begin(host+request, fingerprint); //Specify the URL
 
     // Read the response
     int httpCode = http.GET();
     if (httpCode > 0) { //Check for the returning code
-//        JSONVar payload = JSON.parse(http.getString());
         String payload = http.getString();
 
         DynamicJsonDocument doc(1024);
@@ -245,6 +265,7 @@ void accessdb() {
           return;
         }
 
+//        Print the raw json output
 //        String printStr;
 //        serializeJson(doc, printStr);
 //        Serial.println(printStr);
@@ -257,10 +278,9 @@ void accessdb() {
         // extract the colors for the LEDs
         for (int i = 0; i < NUM_LEDS; i++) {
           for (int j = 0 ; j < 3; j++) {
-            colors[i][j] = obj["colors"][i][j];
+            colors[i][j] = obj["colors"][String(i)][j].as<int>();
           }
         }
-        
     }
     else {
       Serial.println("Error on HTTP request: " + String(httpCode));
@@ -280,6 +300,7 @@ void updateDisplay() {
 
   display.print(tasksTodo);
   display.println(" tasks remaining\n");
+  // Print the names of the tasks
   for(int i = indexOffset; i < tasksTodo; i++) {
     display.print("  ");
     display.println(tasks[i]);
@@ -287,18 +308,19 @@ void updateDisplay() {
       break;
     }
   }
+  // Add a dot to show the currently selected tasks
   int dotPos = 19 + 8*(taskIndex-indexOffset); // each line takes 8 pixels + offset of 3 pixels
   display.fillCircle(3, dotPos, 2, SSD1306_WHITE);
   display.display();
 }
 
+// Set the colors on the map
 void setMap() {
   for(int i=0; i < NUM_LEDS; i++)  {
     updateLED(i, colors[i]);
   }
   updateMap(ledStates);
 }
-
 
 // update bits in ledStates corresponding to a particular room
 void updateLED(int roomID, int *leds) {
@@ -312,6 +334,8 @@ void updateLED(int roomID, int *leds) {
 
 // writes data passed in through mapData to led registers
 void updateMap(const short mapData) {
+  
+  digitalWrite(ledEnablePin, LOW);
   digitalWrite(latchPin1, LOW);
   shiftOut(dataPin, clockPin, MSBFIRST, (mapData >> 8));
   digitalWrite(latchPin1, HIGH);
@@ -319,15 +343,4 @@ void updateMap(const short mapData) {
   digitalWrite(latchPin2, LOW);
   shiftOut(dataPin, clockPin, MSBFIRST, mapData);
   digitalWrite(latchPin2, HIGH);
-}
-
-void clearOutput() {
-  for (int i = 0; i < NUM_LEDS; i++) {
-    for (int j = 0 ; j < 3; j++) {
-      colors[i][j] = 0;
-    }
-  }
-  setMap();
-  display.clearDisplay();
-  display.display();
 }
