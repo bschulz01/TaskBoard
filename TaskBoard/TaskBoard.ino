@@ -9,8 +9,8 @@
 
 //////// NETWORK INTERFACE VARIABLES //////// 
 
-const char* ssid = "SchulzN";//type your ssid
-const char* password = "6371831AAA";//type your password
+const char* ssid = "SSID";//type your ssid
+const char* password = "PSSWD";//type your password
 
 String host = "https://c4jxx1c9ia.execute-api.us-west-2.amazonaws.com/default/TaskBoard";
 char* fingerprint = "E1:0B:3B:EC:6D:81:A4:4E:D0:CB:05:03:2F:F0:02:9C:8E:D1:73:08";
